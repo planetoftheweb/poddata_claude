@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react';
 import { scaleLinear } from 'd3-scale';
 import { extent, max, min } from 'd3-array';
 import { line, curveMonotoneX } from 'd3-shape';
@@ -12,6 +13,8 @@ const chartDimensions = {
 
 const CompletionRateChart = ({ data, averageCompletionRate, insight }) => {
   const { width, height, margin } = chartDimensions;
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+  const wrapperRef = useRef(null);
   const baseXDomain = extent(data, (d) => d.episode);
 
   const { xDomain, zoomRef, resetZoom, xRange } = useZoomPan({
@@ -45,6 +48,77 @@ const CompletionRateChart = ({ data, averageCompletionRate, insight }) => {
   const xTicks = xScale.ticks(6);
   const yTicks = yScale.ticks(5);
 
+  const projectPointToWrapper = (point) => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) {
+      return null;
+    }
+
+    const { width: wrapperWidth, height: wrapperHeight } = wrapper.getBoundingClientRect();
+    if (wrapperWidth === 0 || wrapperHeight === 0) {
+      return null;
+    }
+
+    const svgX = xScale(point.episode);
+    const svgY = yScale(point.completionRate);
+
+    const left = (svgX / width) * wrapperWidth;
+    const top = (svgY / height) * wrapperHeight;
+
+    const horizontalPadding = 12;
+    const verticalPadding = 20;
+
+    return {
+      left: Math.min(Math.max(left, horizontalPadding), wrapperWidth - horizontalPadding),
+      top: Math.min(Math.max(top, verticalPadding), wrapperHeight - verticalPadding),
+    };
+  };
+
+  const handlePointerMove = (event) => {
+    if (!wrapperRef.current) {
+      return;
+    }
+
+    if (event.buttons > 0) {
+      setHoveredPoint(null);
+      return;
+    }
+
+    const wrapperRect = wrapperRef.current.getBoundingClientRect();
+    const pointerX = event.clientX - wrapperRect.left;
+    const pointerY = event.clientY - wrapperRect.top;
+
+    let closestPoint = null;
+    let closestDistance = Infinity;
+    let closestPosition = null;
+
+    data.forEach((point) => {
+      const projected = projectPointToWrapper(point);
+      if (!projected) {
+        return;
+      }
+
+      const distance = Math.hypot(projected.left - pointerX, projected.top - pointerY);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestPoint = point;
+        closestPosition = projected;
+      }
+    });
+
+    const activationRadius = Math.max(24, Math.min(wrapperRect.width, wrapperRect.height) * 0.05);
+
+    if (closestPoint && closestDistance <= activationRadius) {
+      setHoveredPoint({ point: closestPoint, position: closestPosition });
+    } else {
+      setHoveredPoint(null);
+    }
+  };
+
+  const handlePointerLeave = () => {
+    setHoveredPoint(null);
+  };
+
   return (
     <ChartCard
       title="Completion Discipline"
@@ -64,7 +138,8 @@ const CompletionRateChart = ({ data, averageCompletionRate, insight }) => {
         </div>
       }
     >
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Episode completion rate trend">
+      <div className="chart-svg-wrapper" ref={wrapperRef}>
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Episode completion rate trend">
         {yTicks.map((tick) => (
           <line
             key={`y-${tick}`}
@@ -134,11 +209,31 @@ const CompletionRateChart = ({ data, averageCompletionRate, insight }) => {
           fill="transparent"
           className="interaction-layer"
           onDoubleClick={resetZoom}
+          onPointerMove={handlePointerMove}
+          onPointerLeave={handlePointerLeave}
           aria-hidden="true"
         >
           <title>Drag to pan, scroll to zoom, double-click to reset</title>
         </rect>
       </svg>
+      {hoveredPoint ? (
+        <div
+          className="chart-tooltip"
+          role="status"
+          style={{ left: `${hoveredPoint.position.left}px`, top: `${hoveredPoint.position.top}px` }}
+        >
+          <div className="chart-tooltip-heading">Episode {hoveredPoint.point.episode}</div>
+          <div className="chart-tooltip-metric">
+            <span>Completion</span>
+            <strong>{(hoveredPoint.point.completionRate * 100).toFixed(1)}%</strong>
+          </div>
+          <div className="chart-tooltip-metric">
+            <span>Rolling avg</span>
+            <strong>{(hoveredPoint.point.completionRolling * 100).toFixed(1)}%</strong>
+          </div>
+        </div>
+      ) : null}
+      </div>
     </ChartCard>
   );
 };

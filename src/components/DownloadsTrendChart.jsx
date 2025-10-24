@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react';
 import { scaleLinear } from 'd3-scale';
 import { extent, max } from 'd3-array';
 import { area, line, curveMonotoneX } from 'd3-shape';
@@ -12,6 +13,8 @@ const chartDimensions = {
 
 const DownloadsTrendChart = ({ data, insight }) => {
   const { width, height, margin } = chartDimensions;
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+  const wrapperRef = useRef(null);
   const baseXDomain = extent(data, (d) => d.episode);
 
   const { xDomain, zoomRef, resetZoom, xRange } = useZoomPan({
@@ -49,6 +52,77 @@ const DownloadsTrendChart = ({ data, insight }) => {
   const yTicks = yScale.ticks(5);
   const latest = data[data.length - 1];
 
+  const projectPointToWrapper = (point) => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) {
+      return null;
+    }
+
+    const { width: wrapperWidth, height: wrapperHeight } = wrapper.getBoundingClientRect();
+    if (wrapperWidth === 0 || wrapperHeight === 0) {
+      return null;
+    }
+
+    const svgX = xScale(point.episode);
+    const svgY = yScale(point.downloads);
+
+    const left = (svgX / width) * wrapperWidth;
+    const top = (svgY / height) * wrapperHeight;
+
+    const horizontalPadding = 12;
+    const verticalPadding = 20;
+
+    return {
+      left: Math.min(Math.max(left, horizontalPadding), wrapperWidth - horizontalPadding),
+      top: Math.min(Math.max(top, verticalPadding), wrapperHeight - verticalPadding),
+    };
+  };
+
+  const handlePointerMove = (event) => {
+    if (!wrapperRef.current) {
+      return;
+    }
+
+    if (event.buttons > 0) {
+      setHoveredPoint(null);
+      return;
+    }
+
+    const wrapperRect = wrapperRef.current.getBoundingClientRect();
+    const pointerX = event.clientX - wrapperRect.left;
+    const pointerY = event.clientY - wrapperRect.top;
+
+    let closestPoint = null;
+    let closestDistance = Infinity;
+    let closestPosition = null;
+
+    data.forEach((point) => {
+      const projected = projectPointToWrapper(point);
+      if (!projected) {
+        return;
+      }
+
+      const distance = Math.hypot(projected.left - pointerX, projected.top - pointerY);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestPoint = point;
+        closestPosition = projected;
+      }
+    });
+
+    const activationRadius = Math.max(24, Math.min(wrapperRect.width, wrapperRect.height) * 0.05);
+
+    if (closestPoint && closestDistance <= activationRadius) {
+      setHoveredPoint({ point: closestPoint, position: closestPosition });
+    } else {
+      setHoveredPoint(null);
+    }
+  };
+
+  const handlePointerLeave = () => {
+    setHoveredPoint(null);
+  };
+
   return (
     <ChartCard
       title="Downloads Momentum"
@@ -65,7 +139,8 @@ const DownloadsTrendChart = ({ data, insight }) => {
         </div>
       }
     >
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Downloads per episode with moving average">
+      <div className="chart-svg-wrapper" ref={wrapperRef}>
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Downloads per episode with moving average">
         <defs>
           <linearGradient id="downloadsFill" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="rgba(56, 189, 248, 0.45)" />
@@ -136,11 +211,31 @@ const DownloadsTrendChart = ({ data, insight }) => {
           fill="transparent"
           className="interaction-layer"
           onDoubleClick={resetZoom}
+          onPointerMove={handlePointerMove}
+          onPointerLeave={handlePointerLeave}
           aria-hidden="true"
         >
           <title>Drag to pan, scroll to zoom, double-click to reset</title>
         </rect>
       </svg>
+      {hoveredPoint ? (
+        <div
+          className="chart-tooltip"
+          role="status"
+          style={{ left: `${hoveredPoint.position.left}px`, top: `${hoveredPoint.position.top}px` }}
+        >
+          <div className="chart-tooltip-heading">Episode {hoveredPoint.point.episode}</div>
+          <div className="chart-tooltip-metric">
+            <span>Downloads</span>
+            <strong>{hoveredPoint.point.downloads.toLocaleString()}</strong>
+          </div>
+          <div className="chart-tooltip-metric">
+            <span>7-ep avg</span>
+            <strong>{Math.round(hoveredPoint.point.downloadsRolling).toLocaleString()}</strong>
+          </div>
+        </div>
+      ) : null}
+      </div>
     </ChartCard>
   );
 };
